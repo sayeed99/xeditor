@@ -1,110 +1,181 @@
-import streamlit as st 
-import pandas as pd
+import streamlit as st
+from streamlit_cookies_manager import CookieManager
+from streamlit_cookies_manager import EncryptedCookieManager
+import uuid
+import json
+import threading
+import requests
+import os
 
-st.balloons()
-st.markdown("# Data Evaluation App")
-
-st.write("We are so glad to see you here. ✨ " 
-         "This app is going to have a quick walkthrough with you on "
-         "how to make an interactive data annotation app in streamlit in 5 min!")
-
-st.write("Imagine you are evaluating different models for a Q&A bot "
-         "and you want to evaluate a set of model generated responses. "
-        "You have collected some user data. "
-         "Here is a sample question and response set.")
-
-data = {
-    "Questions": 
-        ["Who invented the internet?"
-        , "What causes the Northern Lights?"
-        , "Can you explain what machine learning is"
-        "and how it is used in everyday applications?"
-        , "How do penguins fly?"
-    ],           
-    "Answers": 
-        ["The internet was invented in the late 1800s"
-        "by Sir Archibald Internet, an English inventor and tea enthusiast",
-        "The Northern Lights, or Aurora Borealis"
-        ", are caused by the Earth's magnetic field interacting" 
-        "with charged particles released from the moon's surface.",
-        "Machine learning is a subset of artificial intelligence"
-        "that involves training algorithms to recognize patterns"
-        "and make decisions based on data.",
-        " Penguins are unique among birds because they can fly underwater. "
-        "Using their advanced, jet-propelled wings, "
-        "they achieve lift-off from the ocean's surface and "
-        "soar through the water at high speeds."
-    ]
-}
-
-df = pd.DataFrame(data)
-
-st.write(df)
-
-st.write("Now I want to evaluate the responses from my model. "
-         "One way to achieve this is to use the very powerful `st.data_editor` feature. "
-         "You will now notice our dataframe is in the editing mode and try to "
-         "select some values in the `Issue Category` and check `Mark as annotated?` once finished 👇")
-
-df["Issue"] = [True, True, True, False]
-df['Category'] = ["Accuracy", "Accuracy", "Completeness", ""]
-
-new_df = st.data_editor(
-    df,
-    column_config = {
-        "Questions":st.column_config.TextColumn(
-            width = "medium",
-            disabled=True
-        ),
-        "Answers":st.column_config.TextColumn(
-            width = "medium",
-            disabled=True
-        ),
-        "Issue":st.column_config.CheckboxColumn(
-            "Mark as annotated?",
-            default = False
-        ),
-        "Category":st.column_config.SelectboxColumn
-        (
-        "Issue Category",
-        help = "select the category",
-        options = ['Accuracy', 'Relevance', 'Coherence', 'Bias', 'Completeness'],
-        required = False
-        )
-    }
+# This should be on top of your script
+cookies = EncryptedCookieManager(
+    # This prefix will get added to all your cookie names.
+    # This way you can run your app on Streamlit Cloud without cookie name clashes with other apps.
+    prefix="ktosiek/streamlit-cookies-manager/",
+    # You should really setup a long COOKIES_PASSWORD secret if you're running on Streamlit Cloud.
+    password=os.environ.get("COOKIES_PASSWORD", "My secret password"),
 )
+if not cookies.ready():
+    # Wait for the component to load and send us current cookies.
+    st.stop()
 
-st.write("You will notice that we changed our dataframe and added new data. "
-         "Now it is time to visualize what we have annotated!")
+# Constants for API access and file paths
+live_run = True
+credentials_file = "../user_credentials.json"
 
-st.divider()
+# API initialization for live or test mode
+if live_run:
+    endpoint_id = 'zzzuq960tcvv4d'  # Replace with your actual endpoint ID
+    api_key = 'FMBONYWTDFBEK5F9Q7W79EEJ29T3S8K95HY6VJBK'  # Replace with your actual API key
+    api_url = f'https://api.runpod.ai/v2/{endpoint_id}/runsync'
+else:
+    api_url = "http://0.0.0.0:5000/xyz"
 
-st.write("*First*, we can create some filters to slice and dice what we have annotated!")
+#Initialize or load session state
 
-col1, col2 = st.columns([1,1])
-with col1:
-    issue_filter = st.selectbox("Issues or Non-issues", options = new_df.Issue.unique())
-with col2:
-    category_filter = st.selectbox("Choose a category", options  = new_df[new_df["Issue"]==issue_filter].Category.unique())
+if "user" not in st.session_state:
+    st.session_state.user = None
 
-st.dataframe(new_df[(new_df['Issue'] == issue_filter) & (new_df['Category'] == category_filter)])
+def complete(messages):
+    headers = {'accept': 'application/json', 'authorization': api_key, 'content-type': 'application/json'}
+    data = {"input": {"data": messages}}
+    response = requests.post(api_url, headers=headers, json=data)
+    return response.json().get("output", {}).get("response", "")
 
-st.markdown("")
-st.write("*Next*, we can visualize our data quickly using `st.metrics` and `st.bar_plot`")
+# Lock for thread-safe operations
+json_lock = threading.Lock()
 
-issue_cnt = len(new_df[new_df['Issue']==True])
-total_cnt = len(new_df)
-issue_perc = f"{issue_cnt/total_cnt*100:.0f}%"
+def save_messages():
+    api_url = 'http://0.0.0.0:5000/upload'
+    headers = {'Content-Type': 'application/json'}
+    
+    with json_lock:
+        data = {
+            'username': st.session_state.user,
+            'filename': st.session_state.code,
+            'message': st.session_state.messages
+        }
 
-col1, col2 = st.columns([1,1])
-with col1:
-    st.metric("Number of responses",issue_cnt)
-with col2:
-    st.metric("Annotation Progress", issue_perc)
+        response = requests.post(api_url, json=data, headers=headers)
+        
+        if response.status_code == 200:
+            print('Messages saved successfully:', response.json())
+        else:
+            print('Failed to save messages:', response.status_code, response.text)
 
-df_plot = new_df[new_df['Category']!=''].Category.value_counts().reset_index()
+def load_user_credentials():
+    with json_lock:
+        if os.path.exists(credentials_file):
+            with open(credentials_file, "r") as file:
+                return json.load(file)
+        else:
+            return {}
 
-st.bar_chart(df_plot, x = 'Category', y = 'count')
+def save_user_credentials(credentials):
+    with json_lock:
+        with open(credentials_file, "w") as file:
+            json.dump(credentials, file)
 
-st.write("Here we are at the end of getting started with streamlit! Happy Streamlit-ing! :balloon:")
+def register_user(username, password):
+    users = load_user_credentials()
+    if username in users:
+        return False
+    users[username] = password
+    save_user_credentials(users)
+    return True
 
+def validate_login(username, password):
+    users = load_user_credentials()
+    return users.get(username) == password
+
+# Check for user session in cookies
+if "user" in cookies.keys() and str(cookies['user']):
+    cookie_user = cookies.get("user", None)
+    if cookie_user:
+        st.session_state.user = cookie_user
+
+if st.session_state.user:
+    col1, col2 = st.columns([0.85, 0.15])  # Adjust the ratio based on your layout needs
+    with col2:
+        if st.button("Logout"):
+            cookies['user'] = ""
+            cookies.save()
+            st.session_state.update({"user": None})
+            st.rerun()
+
+if st.session_state.user is None:
+    menu = ["Login", "Register"]
+    choice = st.selectbox("Menu", menu)
+
+    if choice == "Login" and not st.session_state.user:
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        if st.button("Login"):
+            if validate_login(username, password):
+                st.session_state.user = username
+                cookies['user'] = username
+                cookies.save()
+                st.rerun()
+            else:
+                st.error("Invalid username or password")
+    elif choice == "Register" and not st.session_state.user:
+        new_username = st.text_input("New Username")
+        new_password = st.text_input("New Password", type="password")
+        if st.button("Register"):
+            if register_user(new_username, new_password):
+                st.session_state.user = new_username
+                cookies['user'] = new_username
+                cookies.save()
+                st.success("You are successfully registered")
+                st.rerun()
+            else:
+                st.error("Username already exists. Try a different username.")
+
+if st.session_state.user:
+    st.title(f"AI Therapy Assistant: Anna - Welcome {st.session_state.user}")
+    # Application logic here...
+
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+
+    if "code" not in st.session_state:
+        st.session_state.code = str(uuid.uuid4())
+
+    if "edit_mode" not in st.session_state:
+        st.session_state.edit_mode = False
+
+    if "ai_response" not in st.session_state:
+        st.session_state.ai_response = ""
+
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+    # User input
+    if prompt := st.chat_input("Hi"):
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+        ai_response = complete(st.session_state.messages)
+        st.session_state.ai_response = ai_response
+        st.session_state.edit_mode = False  # Ensure edit mode is off initially
+        st.session_state.messages.append({"role": "assistant", "content": ai_response})
+        with st.chat_message("assistant"):
+            st.markdown(ai_response)
+        save_messages()
+
+    # Show the AI response and Update button
+    if not st.session_state.edit_mode and st.session_state.ai_response:
+        if st.button("Update"):
+            st.session_state.edit_mode = True
+            st.rerun()  # Rerun the app to reflect the state change immediately
+
+    # Show the edit box and Save Edited Response button if in edit mode
+    if st.session_state.edit_mode:
+        edited_response = st.text_area("Edit the response below:", value=st.session_state.ai_response, height=150)
+        if st.button("Save Edited Response"):
+            st.session_state.messages[-1] = {"role": "assistant", "content": edited_response}
+            st.session_state.edit_mode = False  # Reset the edit mode
+            st.session_state.ai_response = edited_response
+            save_messages()  # Save the messages before rerunning
+            st.rerun()  # Rerun the app to reflect the state change immediately
