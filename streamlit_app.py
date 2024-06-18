@@ -46,7 +46,7 @@ def complete(messages):
 json_lock = threading.Lock()
 
 def save_messages():
-    api_url = 'http://0.0.0.0:5000/upload'
+    api_url = 'http://13.126.114.136:5000/upload'
     headers = {'Content-Type': 'application/json'}
     
     with json_lock:
