@@ -6,6 +6,9 @@ import json
 import threading
 import requests
 import os
+from datetime import datetime, timedelta
+import random
+import string
 
 # This should be on top of your script
 cookies = EncryptedCookieManager(
@@ -62,6 +65,26 @@ def save_messages():
             print('Messages saved successfully:', response.json())
         else:
             print('Failed to save messages:', response.status_code, response.text)
+
+def get_kolkata_datetime():
+    # Get the current UTC datetime
+    current_utc_datetime = datetime.utcnow()
+    
+    # Define the offset for Asia/Kolkata timezone: UTC+5:30
+    kolkata_offset = timedelta(hours=5, minutes=30)
+    
+    # Calculate the current datetime in Asia/Kolkata
+    current_kolkata_datetime = current_utc_datetime + kolkata_offset
+    
+    # Format the date and time as YYYYMMDDHHMM
+    formatted_datetime = current_kolkata_datetime.strftime('%Y%m%d%H%M')
+    
+    return formatted_datetime
+
+def generate_random_chars():
+    # Create a string of 4 random characters
+    result = ''.join(random.choices(string.ascii_letters, k=4))
+    return result
 
 def load_user_credentials():
     with json_lock:
@@ -139,7 +162,7 @@ if st.session_state.user:
         st.session_state.messages = []
 
     if "code" not in st.session_state:
-        st.session_state.code = str(uuid.uuid4())
+        st.session_state.code = get_kolkata_datetime() + "_" + generate_random_chars() + ".json"
 
     if "edit_mode" not in st.session_state:
         st.session_state.edit_mode = False
