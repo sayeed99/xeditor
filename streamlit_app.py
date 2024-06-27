@@ -10,7 +10,6 @@ from datetime import datetime, timedelta
 import random
 import string
 
-# This should be on top of your script
 cookies = EncryptedCookieManager(
     # This prefix will get added to all your cookie names.
     # This way you can run your app on Streamlit Cloud without cookie name clashes with other apps.
